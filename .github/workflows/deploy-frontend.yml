@@ -39,7 +39,7 @@ jobs:
       - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v4
         with:
-          role-to-assume: arn:aws:iam::573862273216:role/github-oidc-deploy-role --change this to the role you want to assume
+          role-to-assume: arn:aws:iam::573862273216:role/github-karli-repo
           aws-region: eu-north-1
 
       - name: Deploy to S3
