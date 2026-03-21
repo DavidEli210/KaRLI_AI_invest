@@ -1,11 +1,10 @@
 import os
-
+import serverless_wsgi  # You'll need to add this to requirements.txt
 from server.app import app
-from scheduler.scheduler import start_scheduler
 
-LISTEN_HOST = os.environ.get('LISTEN_HOST', 'localhost')
-LISTEN_PORT = os.environ.get('LISTEN_PORT', '8080')
+def handler(event, context):
+    return serverless_wsgi.handle_request(app, event, context)
 
+# Keep this for local testing only
 if __name__ == '__main__':
-    start_scheduler()
-    app.run(debug=True, host=LISTEN_HOST, port=LISTEN_PORT)
+    app.run(debug=True, host='0.0.0.0', port=8080)
