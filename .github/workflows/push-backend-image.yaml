@@ -49,3 +49,9 @@ jobs:
           # Optional: Also tag as 'latest' for easier pulling
           docker tag $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG $ECR_REGISTRY/$ECR_REPOSITORY:latest
           docker push $ECR_REGISTRY/$ECR_REPOSITORY:latest
+      
+      - name: Update Lambda function
+        run: |
+          aws lambda update-function-code \
+            --function-name karli-backend \
+            --image-uri $ECR_REGISTRY/$ECR_REPOSITORY:latest
