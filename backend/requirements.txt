@@ -13,4 +13,5 @@ alpaca-py==0.42.0
 yfinance==0.2.62
 apscheduler==3.11.0
 stable-baselines3==2.7.0
+boto3==1.42.71
 ta==0.11.0
