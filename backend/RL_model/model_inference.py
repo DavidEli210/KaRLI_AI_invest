@@ -63,12 +63,19 @@ def _download_models_from_s3(model_dir: Path) -> None:
             "Check MODEL_S3_PREFIX and that the files exist."
         )
 
-# Initialize manager once
+# Lazy initialization — only download & load models when first needed
 script_dir = Path(__file__).parent
 model_dir = script_dir / "best_models"
-_download_models_from_s3(model_dir)
-model_manager = ModelManager(model_dir)
-model_manager.load_all_models()
+
+_model_manager = None
+
+def _get_model_manager():
+    global _model_manager
+    if _model_manager is None:
+        _download_models_from_s3(model_dir)
+        _model_manager = ModelManager(model_dir)
+        _model_manager.load_all_models()
+    return _model_manager
 
 # Build today’s observation window (29 hist + 1 today)
 def build_obs(ticker:str) -> np.ndarray:
@@ -89,7 +96,7 @@ def predict_stocks_actions(tickers: List[str]) -> List[Tuple[str, str]]:
     tickers_actions = []
 
     for ticker in tickers:
-        model = model_manager.get_model(ticker)
+        model = _get_model_manager().get_model(ticker)
         if model is None:
             print(f"[SKIP] No model found for {ticker}")
             continue
