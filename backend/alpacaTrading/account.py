@@ -5,8 +5,7 @@ from alpaca.data.historical.stock import StockHistoricalDataClient
 from alpaca.data.requests import StockLatestTradeRequest
 from alpaca.trading.enums import QueryOrderStatus, OrderSide, OrderType, TimeInForce
 from alpaca.trading.requests import GetOrdersRequest, GetPortfolioHistoryRequest, OrderRequest
-
-from alpaca_trade_api.rest import APIError
+from alpaca.common.exceptions import APIError
 
 def get_account_info(client: TradingClient):
     try:
