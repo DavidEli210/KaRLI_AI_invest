@@ -51,11 +51,11 @@ jobs:
           docker tag $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG $ECR_REGISTRY/$ECR_REPOSITORY:latest
           docker push $ECR_REGISTRY/$ECR_REPOSITORY:latest
       
-      - name: Update Lambda function
-        env:
-          ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
-          ECR_REPOSITORY: davideli210/karli-backend
-        run: |
-          aws lambda update-function-code \
-            --function-name karli-backend \
-            --image-uri $ECR_REGISTRY/$ECR_REPOSITORY:latest
+      # - name: Update Lambda function
+      #   env:
+      #     ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
+      #     ECR_REPOSITORY: davideli210/karli-backend
+      #   run: |
+      #     aws lambda update-function-code \
+      #       --function-name karli-backend \
+      #       --image-uri $ECR_REGISTRY/$ECR_REPOSITORY:latest
