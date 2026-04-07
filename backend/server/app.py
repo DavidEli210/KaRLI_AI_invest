@@ -10,6 +10,11 @@ CORS(app)
 base_url = "https://paper-api.alpaca.markets"
 
 
+@app.route('/', methods=['GET'])
+def health_check():
+    return jsonify({"status": "ok"}), 200
+
+
 @app.route('/signUp', methods=['POST'])
 def sign_up():
     data = request.json

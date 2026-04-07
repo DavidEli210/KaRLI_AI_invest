@@ -7,5 +7,5 @@ LISTEN_HOST = os.environ.get('LISTEN_HOST', 'localhost')
 LISTEN_PORT = os.environ.get('LISTEN_PORT', '8080')
 
 if __name__ == '__main__':
-    start_scheduler()
+    # start_scheduler()
     app.run(debug=True, host=LISTEN_HOST, port=LISTEN_PORT)
