@@ -51,11 +51,25 @@ jobs:
           docker tag $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG $ECR_REGISTRY/$ECR_REPOSITORY:latest
           docker push $ECR_REGISTRY/$ECR_REPOSITORY:latest
       
-      # - name: Update Lambda function
-      #   env:
-      #     ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
-      #     ECR_REPOSITORY: davideli210/karli-backend
-      #   run: |
-      #     aws lambda update-function-code \
-      #       --function-name karli-backend \
-      #       --image-uri $ECR_REGISTRY/$ECR_REPOSITORY:latest
+      - name: Download current task definition
+        run: |
+          aws ecs describe-task-definition \
+            --task-definition default-karli-backend-fargate-3799 \
+            --query taskDefinition \
+            > task-definition.json
+
+      - name: Render new task definition with updated image
+        id: render-task-def
+        uses: aws-actions/amazon-ecs-render-task-definition@v1
+        with:
+          task-definition: task-definition.json
+          container-name: Main
+          image: ${{ steps.login-ecr.outputs.registry }}/davideli210/karli-backend-fargate:${{ github.sha }}
+
+      - name: Deploy updated task definition to ECS
+        uses: aws-actions/amazon-ecs-deploy-task-definition@v2
+        with:
+          task-definition: ${{ steps.render-task-def.outputs.task-definition }}
+          service: karli-backend-fargate-3799
+          cluster: default
+          wait-for-service-stability: true
