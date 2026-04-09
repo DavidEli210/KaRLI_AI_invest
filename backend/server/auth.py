@@ -4,6 +4,10 @@ from typing import Any, Dict
 
 from flask import jsonify, request
 import jwt
+from dotenv import load_dotenv
+
+
+load_dotenv()
 
 
 COGNITO_REGION = os.getenv("COGNITO_REGION", "")
