@@ -13,7 +13,7 @@ on:
 
 jobs:
   deploy:
-    if: github.event.pull_request.merged == true
+    if: github.event_name == 'push' || (github.event_name == 'pull_request' && github.event.pull_request.merged == true)
     runs-on: ubuntu-latest
     env:
       VITE_API_BASE_URL: https://ka-66589c4f20c544cdaa172b5d6cc6cb6a.ecs.eu-north-1.on.aws
