@@ -1,6 +1,8 @@
 import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import "./homePage.css";
+import { apiFetch } from "@/lib/apiClient";
+import { getStoredUsername, isAuthenticated } from "@/lib/cognitoAuth";
 
 interface SummaryData {
     balance: number;
@@ -16,23 +18,21 @@ export default function HomePage() {
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState<string | null>(null);
 
-    const username = localStorage.getItem("username");
-    const isAuthenticated = localStorage.getItem("isAuthenticated") === "true";
+    const username = getStoredUsername();
+    const auth = isAuthenticated();
 
     // Redirect to login if not authenticated
     useEffect(() => {
-        if (!isAuthenticated || !username) {
+        if (!auth || !username) {
             navigate("/");
         }
-    }, [isAuthenticated, username, navigate]);
+    }, [auth, username, navigate]);
 
     // Fetch summary data for the logged-in user
     useEffect(() => {
-        if (isAuthenticated && username) {
-            fetch(`${import.meta.env.VITE_API_BASE_URL}/summary`, {
+        if (auth && username) {
+            apiFetch("/summary", {
                 method: "POST",
-                headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({ username })
             })
                 .then((res) => res.json())
                 .then((data) => {
@@ -44,13 +44,11 @@ export default function HomePage() {
                     setLoading(false);
                 });
         }
-    }, [isAuthenticated, username]);
+    }, [auth, username]);
 
     const handleStopTrading = () => {
-        fetch(`${import.meta.env.VITE_API_BASE_URL}/stop-trading`, {
+        apiFetch("/stop-trading", {
             method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ username })
         })
             .then((res) => res.json())
             .then((updatedData) => {
@@ -60,7 +58,7 @@ export default function HomePage() {
             });
     };
 
-    if (!isAuthenticated) return null; // Prevent rendering before redirect
+    if (!auth) return null; // Prevent rendering before redirect
 
     if (loading) return <p>Loading...</p>;
     if (error) return <p>{error}</p>;

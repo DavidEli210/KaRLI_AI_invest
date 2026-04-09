@@ -1,6 +1,9 @@
 name: Deploy Frontend to S3
 
 on:
+  push:
+    branches:
+      - use-cognito
   pull_request:
     types: [closed]
     branches:

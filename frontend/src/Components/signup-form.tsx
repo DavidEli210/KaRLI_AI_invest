@@ -22,15 +22,18 @@ import { signupFormSchema } from "@/schemas/signup-form-schema"
 
 
 export function SignupForm({
+  error,
   onSumbit,
   ...props
 }: {
+  error?: string
   onSumbit: (values: z.infer<typeof signupFormSchema>) => void
 }) {
   const form = useForm<z.infer<typeof signupFormSchema>>({
     resolver: zodResolver(signupFormSchema),
     defaultValues: {
       username: "",
+      email: "",
       password: "",
       confirm: "",
       age: 0,
@@ -57,6 +60,9 @@ export function SignupForm({
                 </a>
               </div>
             </div>
+            {error ? (
+              <p className="text-sm text-red-500">{error}</p>
+            ) : null}
             <FormField
               control={form.control}
               name="username"
@@ -65,6 +71,19 @@ export function SignupForm({
                   <FormLabel>Username</FormLabel>
                   <FormControl>
                     <Input {...field} />
+                  </FormControl>
+                  <FormMessage />
+                </FormItem>
+              )}
+            />
+            <FormField
+              control={form.control}
+              name="email"
+              render={({ field }) => (
+                <FormItem>
+                  <FormLabel>Email</FormLabel>
+                  <FormControl>
+                    <Input type="email" {...field} />
                   </FormControl>
                   <FormMessage />
                 </FormItem>

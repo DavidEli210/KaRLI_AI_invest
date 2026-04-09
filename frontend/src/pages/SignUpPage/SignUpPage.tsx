@@ -3,36 +3,44 @@ import { z } from "zod"
 import { SignupForm } from "@/Components/signup-form"
 import { signupFormSchema } from "@/schemas/signup-form-schema"
 import { useNavigate } from "react-router-dom"
+import { signUpWithCognito } from "@/lib/cognitoAuth"
+import { useState } from "react"
 
+type CognitoError = {
+  message?: string
+  code?: string
+}
 
 function SignUpPage() {
     const navigate = useNavigate()
+    const [error, setError] = useState<string>()
+
     const handleSubmit = async (values: z.infer<typeof signupFormSchema>) => {
-      const response = await fetch(`${import.meta.env.VITE_API_BASE_URL}/signUp`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
+      setError(undefined)
+      try {
+        await signUpWithCognito({
           username: values.username,
+          email: values.email,
           password: values.password,
-          age: values.age,
-          brokerApiKey: values.brokerApiKey,
-          brokerApiSecret: values.brokerApiSecret,
-        }),
-      });
-  
-      if (response.ok) {
-        localStorage.setItem("isAuthenticated", "true");
-        localStorage.setItem("username", values.username);
-        navigate("/")
-      } else {
-        alert("An error occurred. We couldn't sign you up right now. Please try again later.")
+          alpacaKey: values.brokerApiKey,
+          alpacaSecret: values.brokerApiSecret,
+        })
+        navigate("/confirm-signup", {
+          state: {
+            username: values.username,
+            email: values.email,
+          },
+        })
+      } catch (caughtError) {
+        const cognitoError = caughtError as CognitoError
+        setError(cognitoError.message ?? "Unable to sign up. Please verify your details and try again.")
       }
     }
   
     return (
       <div className="flex min-h-svh w-full items-center justify-center p-6 md:p-10">
         <div className="w-full max-w-sm">
-          <SignupForm onSumbit={handleSubmit} />
+          <SignupForm error={error} onSumbit={handleSubmit} />
         </div>
       </div>
     )

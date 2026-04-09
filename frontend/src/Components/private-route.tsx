@@ -1,6 +1,7 @@
 import { Navigate, Outlet } from "react-router-dom"
+import { isAuthenticated } from "@/lib/cognitoAuth"
 
 export function PrivateRoute() {
-	const auth = localStorage.getItem("isAuthenticated") === "true"
+	const auth = isAuthenticated()
 	return auth ? <Outlet /> : <Navigate to="/login" />;
 }

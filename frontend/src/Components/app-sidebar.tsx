@@ -16,11 +16,14 @@ import {
   SidebarMenuButton,
   SidebarMenuItem,
 } from "@/Components/ui/sidebar"
+import { getStoredUsername } from "@/lib/cognitoAuth"
+
+const username = getStoredUsername()
 
 const data = {
   user: {
-    name: localStorage.getItem("username"),
-    email: localStorage.getItem("username"),
+    name: username,
+    email: username,
   },
   documents: [
     {
