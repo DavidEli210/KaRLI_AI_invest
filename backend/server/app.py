@@ -1,11 +1,15 @@
 from flask import Flask, request, jsonify
 from flask_cors import CORS
+import logging
+import threading
 from alpacaTrading import create_client, get_account_info, get_open_positions, get_portfolio_history, get_recent_activities
 from cognito_utils import get_user_alpaca_credentials_by_sub
 from server.auth import require_auth
+from server.trading_workflow import run_trading_workflow
 
 app = Flask(__name__)
 CORS(app) 
+logging.basicConfig(level=logging.INFO)
 
 base_url = "https://paper-api.alpaca.markets"
 
@@ -98,6 +102,17 @@ def stop_trading():
         return jsonify({"error": "User not found"}), 404
 
     return jsonify({"message": "Trading has been stopped!", "tradingStatus": "Stopped"}), 200
+
+
+@app.route('/trade/<user_id>', methods=['POST'])
+def trade(user_id: str):
+    thread = threading.Thread(
+        target=run_trading_workflow,
+        args=(user_id,),
+        daemon=True,
+    )
+    thread.start()
+    return jsonify({"status": "processing", "user_id": user_id}), 202
 
 
 

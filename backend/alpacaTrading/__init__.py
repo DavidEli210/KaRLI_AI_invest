@@ -9,5 +9,6 @@ from .account import (
     get_open_positions,
     get_open_orders,
     get_portfolio_history,
-    get_recent_activities
+    get_recent_activities,
+    submit_order,
 )
