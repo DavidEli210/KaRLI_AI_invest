@@ -3,10 +3,11 @@ import json
 import logging
 import os
 from contextlib import AsyncExitStack
-from typing import Any, Dict, List, Optional, TypedDict
+from typing import Any, Dict, List, TypedDict
 
 from langchain_anthropic import ChatAnthropic
 from langchain_core.messages import HumanMessage, SystemMessage, ToolMessage
+from langchain_core.runnables import RunnableConfig
 from langchain_core.tools import StructuredTool
 from langgraph.graph import END, START, StateGraph
 from mcp import ClientSession, StdioServerParameters
@@ -32,12 +33,13 @@ class TradingState(TypedDict):
     portfolio_data: Dict[str, Any]
     market_research: Dict[str, Any]
     trade_signals: List[Dict[str, Any]]
-    runtime: Dict[str, Any]
 
 
 def _to_jsonable(value: Any) -> Any:
     if isinstance(value, (dict, list, str, int, float, bool)) or value is None:
         return value
+    if hasattr(value, "model_dump"):
+        return value.model_dump()
     if hasattr(value, "to_dict"):
         return value.to_dict()
     if hasattr(value, "__dict__"):
@@ -88,6 +90,9 @@ def execute_alpaca_trades(instructions: List[Dict[str, Any]], user_id: str) -> D
         try:
             side = OrderSide.BUY if action == "buy" else OrderSide.SELL
             result = submit_order(client, symbol=str(symbol), quantity=float(quantity), action=side)
+            # Defensive guard: treat structured error payloads as failures.
+            if isinstance(result, dict) and result.get("error"):
+                raise RuntimeError(str(result["error"]))
             executed.append(
                 {
                     "instruction": instruction,
@@ -96,6 +101,12 @@ def execute_alpaca_trades(instructions: List[Dict[str, Any]], user_id: str) -> D
                 }
             )
         except Exception as exc:  # noqa: BLE001
+            logger.exception(
+                "Failed to submit order for user_id=%s symbol=%s action=%s",
+                user_id,
+                symbol,
+                action,
+            )
             executed.append(
                 {
                     "instruction": instruction,
@@ -134,10 +145,9 @@ def _build_tool_args_model(tool_name: str, input_schema: Dict[str, Any]):
         default = ... if field_name in required else None
         fields[field_name] = (py_type, default)
 
-    if not fields:
-        fields["payload"] = (Dict[str, Any], {})
-
     model_name = f"{tool_name.title().replace('-', '_')}Args"
+    if not fields:
+        return create_model(model_name)
     return create_model(model_name, **fields)
 
 
@@ -169,10 +179,7 @@ def _convert_mcp_tools_to_langchain(session: ClientSession, mcp_tools: Any) -> L
         args_schema = _build_tool_args_model(tool_name, input_schema)
 
         async def _tool_coroutine(_tool_name: str = tool_name, **kwargs):
-            call_args = kwargs
-            if "payload" in kwargs and len(kwargs) == 1 and isinstance(kwargs["payload"], dict):
-                call_args = kwargs["payload"]
-            result = await session.call_tool(_tool_name, call_args)
+            result = await session.call_tool(_tool_name, kwargs)
             return await _mcp_tool_result_to_text(result)
 
         def _tool_sync(**kwargs):
@@ -202,9 +209,14 @@ async def _extract_trade_json(text: str) -> List[Dict[str, Any]]:
     parsed = json.loads(cleaned)
     if isinstance(parsed, list):
         return parsed
-    if isinstance(parsed, dict) and "instructions" in parsed and isinstance(parsed["instructions"], list):
-        return parsed["instructions"]
-    raise ValueError("Strategy output is not a JSON list of trade instructions.")
+    if isinstance(parsed, dict):
+        if "instructions" in parsed and isinstance(parsed["instructions"], list):
+            return parsed["instructions"]
+        return [parsed]
+    raise ValueError(
+        "Strategy output must be a JSON list, a single instruction object, "
+        "or an object containing an 'instructions' list."
+    )
 
 
 async def _run_strategy_with_tools(
@@ -260,37 +272,50 @@ async def _run_strategy_with_tools(
 def _build_graph():
     graph_builder = StateGraph(TradingState)
 
-    async def analyst_node(state: TradingState) -> TradingState:
+    async def analyst_node(state: TradingState) -> Dict[str, Any]:
         logger.info("Analyst node: fetching Alpaca portfolio for user_id=%s", state["user_id"])
         portfolio_data = get_alpaca_portfolio(state["user_id"])
-        return {**state, "portfolio_data": portfolio_data}
+        return {"portfolio_data": portfolio_data}
 
-    async def researcher_node(state: TradingState) -> TradingState:
+    async def researcher_node(state: TradingState) -> Dict[str, Any]:
         logger.info("Researcher node: collecting market context via MCP")
         symbols = []
         for pos in state.get("portfolio_data", {}).get("positions", []) or []:
-            symbol = pos.get("symbol")
+            symbol = pos.get("symbol") or pos.get("asset_symbol") or pos.get("ticker")
             if symbol:
                 symbols.append(symbol)
-        state["market_research"] = {
-            "focus_symbols": symbols[:10],
-            "notes": "MCP tools are available to the Strategy node through Claude tool-calling.",
+        if not symbols:
+            logger.warning(
+                "Researcher node found no symbols in positions payload. "
+                "Expected key 'symbol' from Alpaca model_dump(); fallback keys checked: "
+                "'asset_symbol', 'ticker'."
+            )
+        return {
+            "market_research": {
+                "focus_symbols": symbols[:10],
+                "notes": "MCP tools are available to the Strategy node through Claude tool-calling.",
+            }
         }
-        return state
 
-    async def strategy_node(state: TradingState) -> TradingState:
+    async def strategy_node(state: TradingState, config: RunnableConfig) -> Dict[str, Any]:
         logger.info("Strategy node: generating trade signals with Claude")
-        llm_with_tools = state["runtime"]["llm_with_tools"]
-        tool_lookup = state["runtime"]["tool_lookup"]
+        runtime = config.get("configurable", {})
+        if "llm_with_tools" not in runtime or "tool_lookup" not in runtime:
+            raise ValueError("Missing runtime tools in graph config.")
+        llm_with_tools = runtime["llm_with_tools"]
+        tool_lookup = runtime["tool_lookup"]
         instructions = await _run_strategy_with_tools(state, llm_with_tools, tool_lookup)
-        state["trade_signals"] = instructions
-        return state
+        return {"trade_signals": instructions}
 
-    async def executor_node(state: TradingState) -> TradingState:
+    async def executor_node(state: TradingState) -> Dict[str, Any]:
         logger.info("Executor node: submitting trade instructions to Alpaca")
-        result = execute_alpaca_trades(state.get("trade_signals", []), state["user_id"])
+        result = await asyncio.to_thread(
+            execute_alpaca_trades,
+            state.get("trade_signals", []),
+            state["user_id"],
+        )
         logger.info("Executor node complete: %s", json.dumps(result, default=str))
-        return state
+        return {}
 
     graph_builder.add_node("analyst", analyst_node)
     graph_builder.add_node("researcher", researcher_node)
@@ -336,7 +361,7 @@ async def _run_trading_workflow_async(user_id: str) -> None:
         logger.info("Loaded %s MCP tools for strategy agent", len(langchain_tools))
 
         llm = ChatAnthropic(
-            model="claude-3-5-sonnet-latest",
+            model="claude-opus-4-6",
             temperature=0,
             api_key=anthropic_api_key,
         )
@@ -347,12 +372,16 @@ async def _run_trading_workflow_async(user_id: str) -> None:
             "portfolio_data": {},
             "market_research": {},
             "trade_signals": [],
-            "runtime": {
-                "llm_with_tools": llm_with_tools,
-                "tool_lookup": tool_lookup,
-            },
         }
-        final_state = await TRADING_GRAPH.ainvoke(initial_state)
+        final_state = await TRADING_GRAPH.ainvoke(
+            initial_state,
+            config={
+                "configurable": {
+                    "llm_with_tools": llm_with_tools,
+                    "tool_lookup": tool_lookup,
+                }
+            },
+        )
         logger.info(
             "Trading workflow finished for user_id=%s with %s trade signals",
             user_id,
