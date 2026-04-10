@@ -18,6 +18,7 @@ import {
   useSidebar,
 } from "@/Components/ui/sidebar"
 import { useNavigate } from "react-router-dom"
+import { signOut } from "@/lib/cognitoAuth"
 
 export function NavUser({
   user,
@@ -60,7 +61,7 @@ export function NavUser({
             </DropdownMenuLabel>
             <DropdownMenuSeparator />
             <DropdownMenuItem onClick={() => {
-              localStorage.removeItem("isAuthenticated")
+              signOut()
               navigate('/login')
             }}>
               <IconLogout />

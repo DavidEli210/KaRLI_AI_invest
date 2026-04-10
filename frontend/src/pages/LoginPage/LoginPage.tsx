@@ -2,6 +2,7 @@ import { z } from "zod"
 
 import { LoginForm } from "@/Components/login-form"
 import { loginFormSchema } from "@/schemas/login-form-schema"
+import { signInWithCognito } from "@/lib/cognitoAuth"
 
 import { useNavigate } from "react-router-dom"
 import { useState } from "react"
@@ -12,24 +13,14 @@ function LoginPage() {
     const [error, setError] = useState<{ type: string, message: string }>()
 
     const handleSubmit = async (values: z.infer<typeof loginFormSchema>) => {
-        const response = await fetch(`${import.meta.env.VITE_API_BASE_URL}/signIn`, {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-                username: values.username,
-                password: values.password
-            }),
-        });
-
-        if (response.ok) {
-            localStorage.setItem("isAuthenticated", "true");
-            localStorage.setItem("username", values.username);
+        try {
+            await signInWithCognito(values.username, values.password)
             navigate("/")
-        } else {
+        } catch {
             setError({
                 type: "incorrect login",
                 message: "Username or password is incorrect."
-            });
+            })
         }
     }
 

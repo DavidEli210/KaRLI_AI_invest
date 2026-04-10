@@ -8,6 +8,8 @@ import { SiteHeader } from "@/Components/site-header"
 import { SidebarInset, SidebarProvider } from "@/Components/ui/sidebar"
 
 import {ActionType, HoldingType} from "@/types/types.tsx";
+import { apiFetch } from "@/lib/apiClient";
+import { isAuthenticated } from "@/lib/cognitoAuth";
 
 export default function DashboardPage() {
   const [sectionData, setSectionData] = useState<{
@@ -33,19 +35,14 @@ export default function DashboardPage() {
   const [actions, setActions] = useState<ActionType[] | null>(null);
   const [holdings, setHoldings] = useState<HoldingType[] | null>(null);
 
-  const username = localStorage.getItem("username")
-  const isAuthenticated = localStorage.getItem("isAuthenticated") === "true"
+  const auth = isAuthenticated()
 
   useEffect(() => {
     const fetchData = async () => {
       try {
-        if (isAuthenticated && username) {
-          const response = await fetch(`${import.meta.env.VITE_API_BASE_URL}/summary`, {
+        if (auth) {
+          const response = await apiFetch("/summary", {
             method: "POST",
-            headers: {
-              "Content-Type": "application/json",
-            },
-            body: JSON.stringify({ username }),
           })
 
           if (!response.ok) {
@@ -75,7 +72,7 @@ export default function DashboardPage() {
     }
 
     fetchData()
-  }, [])
+  }, [auth])
 
   return (
     <SidebarProvider>

@@ -5,6 +5,7 @@ on:
     branches:
       - push-backend-to-ecr
       - feat--publish-as-fargate-task
+      - use-cognito
   pull_request:
     types: [closed]
     branches:

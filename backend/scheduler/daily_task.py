@@ -7,7 +7,7 @@ from Enums.rl_variables import tickers
 from RL_model.model_inference import predict_stocks_actions
 from alpacaTrading import create_client, create_stock_historical_data_client
 from alpacaTrading.account import submit_order, get_open_positions, get_account_info, get_stock_latest_trade_price
-from mongo_utils import get_all_users_with_credentials
+from cognito_utils import get_all_users_with_credentials
 from scheduler.yahooFinance import set_daily_finance_data
 
 # --- Logging ---
@@ -127,7 +127,6 @@ def daily_task():
             logger.warning("[SKIP] Missing Alpaca credentials for %s", username)
             continue
 
-        logger.info("KEY: %s , SECRET: %s", api_key, api_secret)
         logger.info("USER: %s", username)
         handle_model_recommendation(api_key, api_secret, action_map)
 
