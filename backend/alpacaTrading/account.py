@@ -48,17 +48,15 @@ def submit_order(
         action: OrderSide,
         type=OrderType.MARKET,
         time_in_force=TimeInForce.DAY):
-    try:
-        order = client.submit_order(order_data=OrderRequest(
-            symbol=symbol,
-            qty=quantity,
-            side=action,
-            type=type,
-            time_in_force=time_in_force
-        ))
-        return order
-    except APIError as e:
-        return {"error": str(e)}
+    order = client.submit_order(order_data=OrderRequest(
+        symbol=symbol,
+        qty=quantity,
+        side=action,
+        type=type,
+        time_in_force=time_in_force
+    ))
+    
+    return order
 
 def get_client_position(client: TradingClient, symbol):
     try:
