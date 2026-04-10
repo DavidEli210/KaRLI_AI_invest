@@ -1,0 +1,68 @@
+name: Deploy Trading Lambda
+
+on:
+  pull_request:
+    branches:
+      - main
+    types:
+      - closed
+
+jobs:
+  deploy:
+    name: Package & Deploy Lambda
+    runs-on: ubuntu-latest
+    if: github.event.pull_request.merged == true
+    permissions:
+      id-token: write   # required for OIDC role assumption
+      contents: read
+    defaults:
+      run:
+        working-directory: ./scheduled-trading-lambda
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.14"
+
+      - name: Install dependencies into package dir
+        run: |
+          pip install \
+            --requirement requirements.txt \
+            --target ./package \
+            --upgrade
+
+      - name: Build zip
+        run: |
+          cp lambda_function.py ./package/
+          cd package
+          zip -r ../lambda.zip .
+          cd ..
+          echo "Zip size: $(du -sh lambda.zip | cut -f1)"
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: arn:aws:iam::573862273216:role/github-karli-repo
+          aws-region: eu-north-1
+
+      - name: Deploy to Lambda
+        run: |
+          aws lambda update-function-code \
+            --function-name ${{ secrets.TRIGGER_LAMBDA_FUNCTION_NAME }} \
+            --zip-file fileb://lambda.zip
+
+      - name: Wait for update to complete
+        run: |
+          aws lambda wait function-updated \
+            --function-name ${{ secrets.TRIGGER_LAMBDA_FUNCTION_NAME }}
+
+      - name: Verify deployment
+        run: |
+          aws lambda get-function \
+            --function-name ${{ secrets.TRIGGER_LAMBDA_FUNCTION_NAME }} \
+            --query "Configuration.[FunctionName,Runtime,LastModified,State]" \
+            --output table
