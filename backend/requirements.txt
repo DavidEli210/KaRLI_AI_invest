@@ -9,3 +9,4 @@ langchain-anthropic
 langchain-core
 mcp
 pytz
+uv
