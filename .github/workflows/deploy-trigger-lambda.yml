@@ -6,6 +6,8 @@ on:
       - main
     types:
       - closed
+    paths:
+      - 'scheduled-trading-lambda/**'
 
 jobs:
   deploy:
