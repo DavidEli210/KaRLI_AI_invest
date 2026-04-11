@@ -337,6 +337,8 @@ TRADING_GRAPH = _build_graph()
 async def _run_trading_workflow_async(user_id: str) -> None:
     logger.info("Trading workflow started for user_id=%s", user_id)
     anthropic_api_key = os.getenv("ANTHROPIC_API_KEY")
+    logger.info("ALPHAVANTAGE_API_KEY present: %s", os.getenv("ALPHAVANTAGE_API_KEY"))
+    logger.info("ANTHROPIC_API_KEY present: %s", anthropic_api_key)
     if not anthropic_api_key:
         logger.error("ANTHROPIC_API_KEY is missing. Aborting workflow for user_id=%s", user_id)
         return
@@ -347,7 +349,14 @@ async def _run_trading_workflow_async(user_id: str) -> None:
     mcp_args = [arg for arg in mcp_args_raw.split(" ") if arg]
 
     async with AsyncExitStack() as stack:
-        server_params = StdioServerParameters(command=mcp_command, args=mcp_args)
+        server_params = StdioServerParameters(
+            command=mcp_command,
+            args=mcp_args,
+            env={
+                **os.environ,  # inherit all env vars
+                "ALPHAVANTAGE_API_KEY": os.getenv("ALPHAVANTAGE_API_KEY", ""),
+            }
+)
         read_stream, write_stream = await stack.enter_async_context(stdio_client(server_params))
 
         session = await stack.enter_async_context(ClientSession(read_stream, write_stream))
