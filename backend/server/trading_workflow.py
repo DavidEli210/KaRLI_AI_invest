@@ -371,9 +371,13 @@ async def _run_trading_workflow_async(user_id: str) -> None:
 
         listed_tools = await session.list_tools()
         mcp_tools = getattr(listed_tools, "tools", []) or []
-        langchain_tools = _convert_mcp_tools_to_langchain(session, mcp_tools)
-        tool_lookup = {tool.name: tool for tool in langchain_tools}
-        logger.info("Loaded %s MCP tools for strategy agent", len(langchain_tools))
+        langchain_tools_raw = _convert_mcp_tools_to_langchain(session, mcp_tools)
+        tool_lookup = {tool.name: tool for tool in langchain_tools_raw}  # deduplicates by name
+        langchain_tools = list(tool_lookup.values())
+        logger.info(
+            "Loaded %s MCP tools (%s raw, %s after dedup)",
+            len(langchain_tools), len(langchain_tools_raw), len(langchain_tools),
+        )
 
         llm = ChatAnthropic(
             model="claude-opus-4-6",
