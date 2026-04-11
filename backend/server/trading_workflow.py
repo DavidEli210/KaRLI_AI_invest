@@ -342,8 +342,8 @@ async def _run_trading_workflow_async(user_id: str) -> None:
         return
 
     # MCP server launch command can be customized using env vars.
-    mcp_command = os.getenv("ALPHA_VANTAGE_MCP_COMMAND", "uvx")
-    mcp_args_raw = os.getenv("ALPHA_VANTAGE_MCP_ARGS", "alphavantage-mcp")
+    mcp_command = os.getenv("ALPHA_VANTAGE_MCP_COMMAND", "alphavantage-mcp")
+    mcp_args_raw = os.getenv("ALPHA_VANTAGE_MCP_ARGS", "")
     mcp_args = [arg for arg in mcp_args_raw.split(" ") if arg]
 
     async with AsyncExitStack() as stack:
