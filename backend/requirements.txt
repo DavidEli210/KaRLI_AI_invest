@@ -9,4 +9,7 @@ langchain-anthropic
 langchain-core
 mcp
 pytz
-uv
+alphavantage-mcp
+pydantic>=2.0
+langchain
+anthropic
