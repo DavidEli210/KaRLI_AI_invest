@@ -16,8 +16,6 @@ from mcp.client.stdio import stdio_client
 from pydantic import create_model
 from alpaca.trading.enums import OrderSide
 
-import alphavantage_mcp_server as _av_mcp_module
-
 from alpacaTrading import (
     create_client,
     get_account_info,
@@ -356,10 +354,6 @@ async def _run_trading_workflow_async(user_id: str) -> None:
     mcp_args_raw = os.getenv("ALPHA_VANTAGE_MCP_ARGS", "")
     mcp_args = [arg for arg in mcp_args_raw.split(" ") if arg]
 
-    # Use the package's own directory as cwd so it can find its pyproject.toml
-    mcp_cwd = os.path.dirname(_av_mcp_module.__file__)
-    logger.info("MCP server cwd: %s", mcp_cwd)
-
     async with AsyncExitStack() as stack:
         server_params = StdioServerParameters(
             command=mcp_command,
@@ -367,8 +361,7 @@ async def _run_trading_workflow_async(user_id: str) -> None:
             env={
                 **os.environ,
                 "ALPHAVANTAGE_API_KEY": alphavantage_api_key,
-            },
-            cwd=mcp_cwd,
+            }
         )
         read_stream, write_stream = await stack.enter_async_context(stdio_client(server_params))
 
