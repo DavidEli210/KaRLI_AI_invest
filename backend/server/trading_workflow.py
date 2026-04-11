@@ -2,6 +2,7 @@ import asyncio
 import json
 import logging
 import os
+import site
 from contextlib import AsyncExitStack
 from typing import Any, Dict, List, TypedDict
 
@@ -14,6 +15,8 @@ from mcp import ClientSession, StdioServerParameters
 from mcp.client.stdio import stdio_client
 from pydantic import create_model
 from alpaca.trading.enums import OrderSide
+
+import alphavantage_mcp_server as _av_mcp_module
 
 from alpacaTrading import (
     create_client,
@@ -90,7 +93,6 @@ def execute_alpaca_trades(instructions: List[Dict[str, Any]], user_id: str) -> D
         try:
             side = OrderSide.BUY if action == "buy" else OrderSide.SELL
             result = submit_order(client, symbol=str(symbol), quantity=float(quantity), action=side)
-            # Defensive guard: treat structured error payloads as failures.
             if isinstance(result, dict) and result.get("error"):
                 raise RuntimeError(str(result["error"]))
             executed.append(
@@ -336,27 +338,38 @@ TRADING_GRAPH = _build_graph()
 
 async def _run_trading_workflow_async(user_id: str) -> None:
     logger.info("Trading workflow started for user_id=%s", user_id)
+
     anthropic_api_key = os.getenv("ANTHROPIC_API_KEY")
-    logger.info("ALPHAVANTAGE_API_KEY present: %s", os.getenv("ALPHAVANTAGE_API_KEY"))
-    logger.info("ANTHROPIC_API_KEY present: %s", anthropic_api_key)
+    alphavantage_api_key = os.getenv("ALPHAVANTAGE_API_KEY")
+
+    logger.info("ANTHROPIC_API_KEY present: %s", bool(anthropic_api_key))
+    logger.info("ALPHAVANTAGE_API_KEY present: %s", bool(alphavantage_api_key))
+
     if not anthropic_api_key:
         logger.error("ANTHROPIC_API_KEY is missing. Aborting workflow for user_id=%s", user_id)
         return
+    if not alphavantage_api_key:
+        logger.error("ALPHAVANTAGE_API_KEY is missing. Aborting workflow for user_id=%s", user_id)
+        return
 
-    # MCP server launch command can be customized using env vars.
     mcp_command = os.getenv("ALPHA_VANTAGE_MCP_COMMAND", "alphavantage-mcp")
     mcp_args_raw = os.getenv("ALPHA_VANTAGE_MCP_ARGS", "")
     mcp_args = [arg for arg in mcp_args_raw.split(" ") if arg]
+
+    # Use the package's own directory as cwd so it can find its pyproject.toml
+    mcp_cwd = os.path.dirname(_av_mcp_module.__file__)
+    logger.info("MCP server cwd: %s", mcp_cwd)
 
     async with AsyncExitStack() as stack:
         server_params = StdioServerParameters(
             command=mcp_command,
             args=mcp_args,
             env={
-                **os.environ,  # inherit all env vars
-                "ALPHAVANTAGE_API_KEY": os.getenv("ALPHAVANTAGE_API_KEY", ""),
-            }
-)
+                **os.environ,
+                "ALPHAVANTAGE_API_KEY": alphavantage_api_key,
+            },
+            cwd=mcp_cwd,
+        )
         read_stream, write_stream = await stack.enter_async_context(stdio_client(server_params))
 
         session = await stack.enter_async_context(ClientSession(read_stream, write_stream))
