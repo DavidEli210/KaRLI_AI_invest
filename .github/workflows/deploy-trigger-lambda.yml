@@ -37,7 +37,7 @@ jobs:
 
       - name: Build zip
         run: |
-          cp lambda_function.py ./package/
+          cp trading_triggering.py ./package/lambda_function.py
           cd package
           zip -r ../lambda.zip .
           cd ..
