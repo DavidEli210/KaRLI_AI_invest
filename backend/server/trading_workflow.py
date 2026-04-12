@@ -2,7 +2,7 @@ import asyncio
 import json
 import logging
 import os
-import site
+import random
 from contextlib import AsyncExitStack
 from typing import Any, Dict, List, TypedDict
 
@@ -20,7 +20,6 @@ from alpacaTrading import (
     create_client,
     get_account_info,
     get_open_positions,
-    get_portfolio_history,
     submit_order,
 )
 from cognito_utils import get_user_alpaca_credentials_by_sub
@@ -48,21 +47,48 @@ def _to_jsonable(value: Any) -> Any:
     return str(value)
 
 
+def _trim_portfolio(account_info: Any, positions: Any) -> Dict[str, Any]:
+    """Reduce portfolio data to only the fields the LLM needs, cutting ~80% of tokens."""
+    raw_account = _to_jsonable(account_info) or {}
+    raw_positions = _to_jsonable(positions) or []
+
+    trimmed_account = {
+        k: raw_account[k]
+        for k in ("cash", "equity")
+        if raw_account.get(k) is not None
+    }
+
+    trimmed_positions = [
+        {
+            k: pos[k]
+            for k in ("symbol", "qty", "market_value", "unrealized_pl")
+            if pos.get(k) is not None
+        }
+        for pos in (raw_positions if isinstance(raw_positions, list) else [])
+    ]
+
+    return {
+        "account_info": trimmed_account,
+        "positions": trimmed_positions,
+    }
+
+
 def get_alpaca_portfolio(user_id: str) -> Dict[str, Any]:
     credentials = get_user_alpaca_credentials_by_sub(user_id)
     if not credentials:
         raise ValueError(f"Alpaca credentials not found for user_id={user_id}")
 
     client = create_client(credentials["api_key"], credentials["api_secret"])
-    account_info = _to_jsonable(get_account_info(client))
-    positions = _to_jsonable(get_open_positions(client))
-    portfolio_history = _to_jsonable(get_portfolio_history(client))
+    account_info = get_account_info(client)
+    positions = get_open_positions(client)
 
-    return {
-        "account_info": account_info,
-        "positions": positions,
-        "portfolio_history": portfolio_history,
-    }
+    portfolio = _trim_portfolio(account_info, positions)
+    logger.info(
+        "Portfolio trimmed: %d positions, account keys: %s",
+        len(portfolio["positions"]),
+        list(portfolio["account_info"].keys()),
+    )
+    return portfolio
 
 
 def execute_alpaca_trades(instructions: List[Dict[str, Any]], user_id: str) -> Dict[str, Any]:
@@ -219,6 +245,23 @@ async def _extract_trade_json(text: str) -> List[Dict[str, Any]]:
     )
 
 
+async def _invoke_with_backoff(llm_with_tools: Any, messages: List[Any], max_retries: int = 4) -> Any:
+    for attempt in range(max_retries):
+        try:
+            return await llm_with_tools.ainvoke(messages)
+        except Exception as exc:
+            if "rate_limit" in str(exc).lower() or "429" in str(exc):
+                wait = (2 ** attempt) + random.uniform(0, 1)
+                logger.warning(
+                    "Rate limited, retrying in %.1fs (attempt %d/%d)",
+                    wait, attempt + 1, max_retries,
+                )
+                await asyncio.sleep(wait)
+            else:
+                raise
+    raise RuntimeError("Exceeded max retries due to rate limiting.")
+
+
 async def _run_strategy_with_tools(
     state: TradingState,
     llm_with_tools: Any,
@@ -228,22 +271,25 @@ async def _run_strategy_with_tools(
         "You are an institutional trading strategist. Prioritize capital preservation, "
         "position sizing discipline, drawdown limits, and concentration risk. Avoid overtrading. "
         "Output ONLY valid JSON: a list of instructions with keys "
-        "action (buy/sell/hold), symbol, quantity, and rationale."
+        "action (buy/sell/hold), symbol, quantity, and rationale. "
+        "You are allowed to call up to 4 tools in total, do not call more than 4 tools."
     )
 
     user_payload = {
-        "user_id": state["user_id"],
         "portfolio_data": state["portfolio_data"],
         "market_research": state["market_research"],
     }
+
+    portfolio_tokens = len(json.dumps(state.get("portfolio_data", {}), default=str)) // 4
+    logger.info("Estimated portfolio tokens: ~%d", portfolio_tokens)
 
     messages: List[Any] = [
         SystemMessage(content=system_prompt),
         HumanMessage(content=json.dumps(user_payload, default=str)),
     ]
 
-    for _ in range(5):
-        ai_message = await llm_with_tools.ainvoke(messages)
+    for _ in range(2):
+        ai_message = await _invoke_with_backoff(llm_with_tools, messages)
         messages.append(ai_message)
 
         tool_calls = getattr(ai_message, "tool_calls", None) or []
@@ -251,6 +297,7 @@ async def _run_strategy_with_tools(
             content = ai_message.content if isinstance(ai_message.content, str) else str(ai_message.content)
             return await _extract_trade_json(content)
 
+        tool_calls = tool_calls[:4]  # hard cap regardless of what the model requests
         for call in tool_calls:
             tool_name = call["name"]
             tool = tool_lookup.get(tool_name)
@@ -266,7 +313,14 @@ async def _run_strategy_with_tools(
                 )
             )
 
-    raise RuntimeError("Strategy exceeded max tool-call rounds without final JSON output.")
+    # Final call with no tools — forces JSON response, Claude cannot make further tool calls
+    messages.append(SystemMessage(
+        content="You have enough data. Do NOT call any tools. "
+                "Respond ONLY with valid JSON as instructed."
+    ))
+    ai_message = await _invoke_with_backoff(llm_with_tools, messages)
+    content = ai_message.content if isinstance(ai_message.content, str) else str(ai_message.content)
+    return await _extract_trade_json(content)
 
 
 def _build_graph():
@@ -281,15 +335,11 @@ def _build_graph():
         logger.info("Researcher node: collecting market context via MCP")
         symbols = []
         for pos in state.get("portfolio_data", {}).get("positions", []) or []:
-            symbol = pos.get("symbol") or pos.get("asset_symbol") or pos.get("ticker")
+            symbol = pos.get("symbol")
             if symbol:
                 symbols.append(symbol)
         if not symbols:
-            logger.warning(
-                "Researcher node found no symbols in positions payload. "
-                "Expected key 'symbol' from Alpaca model_dump(); fallback keys checked: "
-                "'asset_symbol', 'ticker'."
-            )
+            logger.warning("Researcher node found no symbols in trimmed positions payload.")
         return {
             "market_research": {
                 "focus_symbols": symbols[:10],
@@ -372,11 +422,21 @@ async def _run_trading_workflow_async(user_id: str) -> None:
         listed_tools = await session.list_tools()
         mcp_tools = getattr(listed_tools, "tools", []) or []
         langchain_tools_raw = _convert_mcp_tools_to_langchain(session, mcp_tools)
-        tool_lookup = {tool.name: tool for tool in langchain_tools_raw}  # deduplicates by name
-        langchain_tools = list(tool_lookup.values())
+
+        # Deduplicate and filter to only relevant tools
+        all_tools = {tool.name: tool for tool in langchain_tools_raw}
+        KEYWORDS = {"price", "quote", "indicator", "rsi", "macd", "sma", "news"}
+        filtered_tools = [
+            t for t in all_tools.values()
+            if any(kw in t.name.lower() for kw in KEYWORDS)
+        ] or list(all_tools.values())  # fallback: use all if none match keywords
+
+        # tool_lookup is scoped to filtered tools only — keeps Claude and executor in sync
+        tool_lookup = {t.name: t for t in filtered_tools}
+
         logger.info(
-            "Loaded %s MCP tools (%s raw, %s after dedup)",
-            len(langchain_tools), len(langchain_tools_raw), len(langchain_tools),
+            "Tools: %d total, %d after dedup, %d after keyword filter",
+            len(langchain_tools_raw), len(all_tools), len(filtered_tools),
         )
 
         llm = ChatAnthropic(
@@ -384,7 +444,7 @@ async def _run_trading_workflow_async(user_id: str) -> None:
             temperature=0,
             api_key=anthropic_api_key,
         )
-        llm_with_tools = llm.bind_tools(langchain_tools)
+        llm_with_tools = llm.bind_tools(filtered_tools)
 
         initial_state: TradingState = {
             "user_id": user_id,
