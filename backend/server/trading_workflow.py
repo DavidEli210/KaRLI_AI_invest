@@ -333,7 +333,7 @@ async def _run_strategy_with_tools(
             )
 
     # Final call — force JSON response, no more tool calls
-    messages.append(SystemMessage(
+    messages.append(HumanMessage(
         content="You have enough data. Do NOT call any tools. "
                 "Respond ONLY with a valid JSON list of trade instructions as specified. "
                 "If there are no actionable trades, return an empty list: []"
