@@ -31,7 +31,6 @@ logger = logging.getLogger(__name__)
 class TradingState(TypedDict):
     user_id: str
     portfolio_data: Dict[str, Any]
-    market_research: Dict[str, Any]
     trade_signals: List[Dict[str, Any]]
 
 
@@ -267,25 +266,45 @@ async def _run_strategy_with_tools(
     llm_with_tools: Any,
     tool_lookup: Dict[str, StructuredTool],
 ) -> List[Dict[str, Any]]:
+    portfolio = state["portfolio_data"]
+    cash = portfolio.get("account_info", {}).get("cash", "unknown")
+    positions = portfolio.get("positions", [])
+    held_symbols = [p["symbol"] for p in positions if p.get("symbol")]
+
     system_prompt = (
-        "You are an institutional trading strategist. Prioritize capital preservation, "
-        "position sizing discipline, drawdown limits, and concentration risk. Avoid overtrading. "
-        "Output ONLY valid JSON: a list of instructions with keys "
-        "action (buy/sell/hold), symbol, quantity, and rationale. "
-        "You are allowed to call up to 4 tools in total, do not call more than 4 tools."
+        "You are an institutional trading strategist with full autonomy to discover and act on market opportunities.\n\n"
+
+        "RESEARCH:\n"
+        "You are NOT limited to existing holdings. Use your available tools proactively to find promising stocks. "
+        "Research any symbols you believe have opportunity — use price, quote, technical indicator, and news tools "
+        "to build conviction before deciding.\n\n"
+
+        "CAPITAL RULES:\n"
+        f"- Your available cash is: {cash}. This is fixed. Do not assume it will increase.\n"
+        "- Do NOT count on proceeds from any sell instructions in this session — "
+        "sell settlements are not immediate, so treat available cash as the number above only.\n"
+        "- Do NOT deploy all available cash. Keep a minimum 20-30% reserve at all times.\n"
+        "- Spread buys across multiple positions. No single buy should exceed 20% of available cash.\n"
+        "- Size positions conservatively. Prioritize capital preservation over maximizing deployment.\n\n"
+
+        "SELL RULES:\n"
+        f"- You may only sell symbols you currently hold: {held_symbols if held_symbols else 'none'}.\n"
+        "- Do not instruct a sell for any symbol not in that list.\n\n"
+
+        "OUTPUT RULES:\n"
+        "- Output ONLY valid JSON: a list of trade instructions.\n"
+        "- Each instruction must have exactly these keys: action (buy or sell), symbol, quantity, rationale.\n"
+        "- Do NOT include hold instructions — omit them entirely.\n"
+        "- If no actionable opportunities exist, return an empty list: []\n"
+        "- You may call up to 4 tools before deciding. Use them to build conviction.\n"
     )
 
-    user_payload = {
-        "portfolio_data": state["portfolio_data"],
-        "market_research": state["market_research"],
-    }
-
-    portfolio_tokens = len(json.dumps(state.get("portfolio_data", {}), default=str)) // 4
+    portfolio_tokens = len(json.dumps(portfolio, default=str)) // 4
     logger.info("Estimated portfolio tokens: ~%d", portfolio_tokens)
 
     messages: List[Any] = [
         SystemMessage(content=system_prompt),
-        HumanMessage(content=json.dumps(user_payload, default=str)),
+        HumanMessage(content=json.dumps({"portfolio_data": portfolio}, default=str)),
     ]
 
     for _ in range(2):
@@ -313,10 +332,11 @@ async def _run_strategy_with_tools(
                 )
             )
 
-    # Final call with no tools — forces JSON response, Claude cannot make further tool calls
+    # Final call — force JSON response, no more tool calls
     messages.append(SystemMessage(
         content="You have enough data. Do NOT call any tools. "
-                "Respond ONLY with valid JSON as instructed."
+                "Respond ONLY with a valid JSON list of trade instructions as specified. "
+                "If there are no actionable trades, return an empty list: []"
     ))
     ai_message = await _invoke_with_backoff(llm_with_tools, messages)
     content = ai_message.content if isinstance(ai_message.content, str) else str(ai_message.content)
@@ -331,22 +351,6 @@ def _build_graph():
         portfolio_data = get_alpaca_portfolio(state["user_id"])
         return {"portfolio_data": portfolio_data}
 
-    async def researcher_node(state: TradingState) -> Dict[str, Any]:
-        logger.info("Researcher node: collecting market context via MCP")
-        symbols = []
-        for pos in state.get("portfolio_data", {}).get("positions", []) or []:
-            symbol = pos.get("symbol")
-            if symbol:
-                symbols.append(symbol)
-        if not symbols:
-            logger.warning("Researcher node found no symbols in trimmed positions payload.")
-        return {
-            "market_research": {
-                "focus_symbols": symbols[:10],
-                "notes": "MCP tools are available to the Strategy node through Claude tool-calling.",
-            }
-        }
-
     async def strategy_node(state: TradingState, config: RunnableConfig) -> Dict[str, Any]:
         logger.info("Strategy node: generating trade signals with Claude")
         runtime = config.get("configurable", {})
@@ -355,6 +359,7 @@ def _build_graph():
         llm_with_tools = runtime["llm_with_tools"]
         tool_lookup = runtime["tool_lookup"]
         instructions = await _run_strategy_with_tools(state, llm_with_tools, tool_lookup)
+        logger.info("Strategy node produced %d instructions", len(instructions))
         return {"trade_signals": instructions}
 
     async def executor_node(state: TradingState) -> Dict[str, Any]:
@@ -368,13 +373,11 @@ def _build_graph():
         return {}
 
     graph_builder.add_node("analyst", analyst_node)
-    graph_builder.add_node("researcher", researcher_node)
     graph_builder.add_node("strategy", strategy_node)
     graph_builder.add_node("executor", executor_node)
 
     graph_builder.add_edge(START, "analyst")
-    graph_builder.add_edge("analyst", "researcher")
-    graph_builder.add_edge("researcher", "strategy")
+    graph_builder.add_edge("analyst", "strategy")
     graph_builder.add_edge("strategy", "executor")
     graph_builder.add_edge("executor", END)
 
@@ -431,7 +434,7 @@ async def _run_trading_workflow_async(user_id: str) -> None:
             if any(kw in t.name.lower() for kw in KEYWORDS)
         ] or list(all_tools.values())  # fallback: use all if none match keywords
 
-        # tool_lookup is scoped to filtered tools only — keeps Claude and executor in sync
+        # tool_lookup scoped to filtered tools only — keeps Claude and executor in sync
         tool_lookup = {t.name: t for t in filtered_tools}
 
         logger.info(
@@ -449,7 +452,6 @@ async def _run_trading_workflow_async(user_id: str) -> None:
         initial_state: TradingState = {
             "user_id": user_id,
             "portfolio_data": {},
-            "market_research": {},
             "trade_signals": [],
         }
         final_state = await TRADING_GRAPH.ainvoke(
