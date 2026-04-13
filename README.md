@@ -1,142 +1,80 @@
-# KaRLI_AI - Reinforcement Learning Investor 🚀💸
+# KaRLI - AI Trading Agent 🚀💸
 
-Welcome to the **Reinforcement Learning Investor** project! This platform leverages cutting-edge **Deep Learning** and **Reinforcement Learning (RL)** technologies to create an **automated investment portfolio management system**. It aims to optimize returns while maintaining robust risk management tailored to individual user preferences. 🌟
+Welcome to the **KaRLI_AI** project! This platform leverages **Large Language Models (LLMs)** and the **Model Context Protocol (MCP)** to create an **autonomous investment portfolio management system**. It aims to discover and act on market opportunities using real-time data and intelligent decision-making, providing smart, automated investment strategies. 🌟
 
 ---
 
 ## 📖 Overview
 
-This project combines state-of-the-art AI algorithms, real-time financial market analysis, and an intuitive user interface to provide **smart, actionable investment decisions**. It bridges **advanced RL models** with seamless integration into real-world trading systems.
+This project has evolved from a Reinforcement Learning approach to a state-of-the-art **Agentic AI architecture**. Utilizing Anthropic's Claude orchestration through LangGraph, the agent researches market trends via Alpha Vantage, manages capital efficiently, and executes live trades via Alpaca's API. A scheduled AWS Lambda job ensures the portfolio is continuously reviewed and traded on autopilot.
 
 Key features include:
-- Automated trading decisions: `Buy`, `Sell`, or `Hold` 📈📉
-- Real-time portfolio analysis with visual insights 📊
-- Risk management tailored to user preferences ⚖️
-- Connection to live trading accounts via APIs 🔗
+- Autonomous trading decisions: `Buy` and `Sell` instructions based on live data 📈📉
+- Secure user registration and authentication via **Amazon Cognito** 👤
+- Real-time portfolio analysis with visual insights on the React frontend 📊
+- Connection to live trading accounts via Alpaca API 🔗
+- Periodic, hands-free portfolio evaluation driven by AWS Lambda 🤖
 
 ---
 
 ## ✨ Features
 
-1. **User Management** 👤
-   - Secure sign-up and login.
-   - Personalized risk profiling and preferences.
+1. **User Management & Registration** 👤
+   - Secure sign-up, login, and user registration managed completely by **Amazon Cognito**.
+   - Input your Alpaca broker credentials to link your investment account.
 
 2. **Portfolio Summary & Insights** 💼
-   - Total portfolio worth and investment distribution.
-   - Historical trading actions and performance metrics.
+   - Total portfolio worth, account balance, and existing holdings displayed dynamically.
+   - Historical trading actions and performance metrics via a modern React UI.
 
-3. **Reinforcement Learning Models** 🧠
-   - Intelligent decision-making using **TensorFlow**, **Stable-Baselines3**, and **OpenAI Gym**.
-   - Continuous learning from live market data.
+3. **Autonomous AI Trading Agent** 🧠
+   - Intelligent decision-making using **LangChain**, **LangGraph**, and **Anthropic's Claude**.
+   - Access to real-time market data, technical indicators (RSI, MACD, SMA), and financial news through the **Alpha Vantage MCP server**.
+   - Strict capital preservation and risk management rules enforced within the prompt strategy.
 
 4. **Automated Trading Execution** 🤖
-   - Direct integration with broker APIs for seamless trading.
-   - Real-time logging of actions for full transparency.
-
-5. **Data Management** 📂
-   - Historical stock data, technical indicators, and macroeconomic factors.
-   - Secure storage in **MongoDB**.
+   - Direct integration with **Alpaca API** for seamless trade execution.
+   - A scheduled **AWS Lambda** workflow that triggers trading analysis periodically for all registered users without manual intervention.
 
 ---
 
 ## 🛠️ Technologies Used
 
 ### Backend 🖥️
-- **Flask**: Web server and API management.
-- **TensorFlow / PyTorch**: Deep Learning framework for RL model development.
-- **MongoDB**: NoSQL database for scalable user and financial data storage.
+- **Python (Flask)**: Web server exposing API endpoints for the trading logic and frontend integration.
+- **LangChain & LangGraph**: AI orchestration and tool mapping.
+- **Model Context Protocol (MCP)**: Connecting Claude to Alpha Vantage for live market data.
+- **Alpaca API**: Executing market trades and fetching portfolio data.
 
 ### Frontend 🌐
-- **React.js**: Modern UI library for an intuitive user experience.
-- **Chart.js / D3.js**: For dynamic and responsive visualizations.
+- **React.js & Vite**: Modern, lightning-fast UI library and build tool.
+- **Tailwind CSS & Shadcn UI**: For elegant, responsive, and accessible styling.
+- **Recharts**: For dynamic and responsive financial visualizations.
 
-### Reinforcement Learning Frameworks 🤖
-- **Stable-Baselines3**: RL algorithms like PPO and DDPG.
-- **OpenAI Gym**: Simulation environment for model training.
-
+### Cloud & Automation ☁️
+- **AWS Lambda**: Scheduled chron jobs triggering the AI trading workflow.
+- **Amazon Cognito**: User directories, registration, and authentication.
+- **AWS S3**: Static website hosting for the frontend.
+- **AWS CloudFront**: CDN for the frontend.
+- **AWS ECS**: Running the backend and open for scaling .
 ---
 
 ## 🚀 How It Works
 
 1. **User Registration & Setup**
-   - Users register and set investment preferences (e.g., risk tolerance).
+   - Users register via the platform utilizing **Amazon Cognito**. 
+   - After signing in, users provide their Alpaca API credentials to enable live agentic trading.
 
-2. **Data Processing & Analysis**
-   - Financial market data is fetched and preprocessed.
+2. **Scheduled Trigger**
+   - At scheduled intervals, the AWS Lambda function fetches all registered users from Cognito.
+   - It invokes the trading backend endpoint for each user.
 
-3. **Model Training & Recommendations**
-   - The RL model learns market dynamics and generates trading recommendations.
+3. **Data Processing & AI Strategy**
+   - The Flask backend initiates the LangGraph trading workflow.
+   - The AI agent dynamically analyzes the user's Alpaca portfolio.
+   - It issues MCP tool calls to retrieve technical indicators and live quotes to find new opportunities.
 
 4. **Automated Trading**
-   - Trades are executed via API integration, and results are logged in real-time.
+   - LLM outputs a structured JSON list of validated trade instructions.
+   - The backend directly submits these instructions to the Alpaca broker API.
 
----
-
-## 📦 Getting Started
-
-### Prerequisites
-- Installed Docker
-- API keys for financial data (e.g., Yahoo Finance, Alpha Vantage)
-
-### Development Environment Setup
-
-1. Clone the repository:
-   ```bash
-   git clone https://github.com/YourUsername/Reinforcement-Learning-Investor.git
-   ```
-
-1. Build containers:
-   ```
-   docker-compose build
-   ```
-   This will automatically build all the necessary containers for the system to run.
-
-1. Run dev environment:
-   ```
-   docker-compose up -d
-   ```
-   Every container listens on the local storage, so any code change will not require rebuild, but may require restarting.
-
-1. Check status:
-   ```
-   docker-compose ps
-   ```
-
-1. Check logs:
-   ```
-   docker-compose logs <service-name> --tail=50 -f
-   ```
-
-1. Use [`lazydocker`](https://github.com/jesseduffield/lazydocker/releases/tag/v0.24.1) (recommended)
-
----
-
-## 🌟 Team Members
-
-- **Nadav Chen**
-- **Michael Sarusi**
-- **David Elimelech**
-- **Daniel Perets**
-- **Itai Shalev**
-- **Edwin Krasheninin**
-
----
-
-## 🧩 Future Enhancements
-
-- **Paper Trading Mode** 📝: Test strategies risk-free.
-- **Enhanced Visualizations** 📈: More comprehensive portfolio insights.
-- **Mobile App** 📱: Manage investments on the go.
-
----
-
-## 📞 Contact
-
-Have questions or feedback? Reach out to us:
-📧 Email: Nadav2282@gmail.com
-
-![image](https://github.com/user-attachments/assets/4a1de37a-2a6e-4561-9167-4b3fec36600f)
----
-
-Let me know if there's anything else you'd like to add! 😊
