@@ -1,12 +1,6 @@
 name: Build and Push backend to ECR
 
 on:
-  push:
-    branches:
-      - push-backend-to-ecr
-      - feat--publish-as-fargate-task
-      - use-cognito
-      - feat-remove-mongo-and-scheduler
   pull_request:
     types: [closed]
     branches:
