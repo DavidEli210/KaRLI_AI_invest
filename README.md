@@ -6,7 +6,7 @@ Welcome to the **KaRLI_AI** project! This platform leverages **Large Language Mo
 
 ## 📖 Overview
 
-This project has evolved from a Reinforcement Learning approach to a state-of-the-art **Agentic AI architecture**. Utilizing Anthropic's Claude orchestration through LangGraph, the agent researches market trends via Alpha Vantage, manages capital efficiently, and executes live trades via Alpaca's API. A scheduled AWS Lambda job ensures the portfolio is continuously reviewed and traded on autopilot.
+An agentic AI system built on LangGraph, that pulls market data using mcp server tools, manages capital allocation, and executes live trades through Alpaca's API — all triggered automatically by a scheduled AWS Lambda function.
 
 Key features include:
 - Autonomous trading decisions: `Buy` and `Sell` instructions based on live data 📈📉
