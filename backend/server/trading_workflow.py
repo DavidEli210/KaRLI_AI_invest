@@ -279,7 +279,18 @@ def _build_graph(filtered_tools: List[StructuredTool]):
 async def _run_trading_workflow_async(user_id: str) -> None:
 
     async with AsyncExitStack() as stack:
-        session = await stack.enter_async_context(ClientSession(*await stdio_client(StdioServerParameters(command="alphavantage-mcp"))))
+        server_params = StdioServerParameters(
+            command="alphavantage-mcp",
+        )
+
+        read_stream, write_stream = await stack.enter_async_context(
+            stdio_client(server_params)
+        )
+
+        session = await stack.enter_async_context(
+            ClientSession(read_stream, write_stream)
+        )
+
         await session.initialize()
 
         tools = _convert_mcp_tools_to_langchain(session, (await session.list_tools()).tools)
