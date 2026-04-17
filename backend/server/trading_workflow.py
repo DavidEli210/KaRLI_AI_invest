@@ -4,13 +4,20 @@ import logging
 import os
 import random
 from contextlib import AsyncExitStack
-from typing import Any, Dict, List, TypedDict
+from typing import Annotated, Any, Dict, List, TypedDict
 
 from langchain_anthropic import ChatAnthropic
-from langchain_core.messages import HumanMessage, SystemMessage, ToolMessage
+from langchain_core.messages import (
+    AIMessage,
+    BaseMessage,
+    HumanMessage,
+    SystemMessage,
+)
 from langchain_core.runnables import RunnableConfig
 from langchain_core.tools import StructuredTool
 from langgraph.graph import END, START, StateGraph
+from langgraph.graph.message import add_messages
+from langgraph.prebuilt import ToolNode, tools_condition
 from mcp import ClientSession, StdioServerParameters
 from mcp.client.stdio import stdio_client
 from pydantic import create_model
@@ -28,11 +35,22 @@ from cognito_utils import get_user_alpaca_credentials_by_sub
 logger = logging.getLogger(__name__)
 
 
+# ---------------------------------------------------------------------------
+# State
+# ---------------------------------------------------------------------------
+
 class TradingState(TypedDict):
     user_id: str
     portfolio_data: Dict[str, Any]
+    # `add_messages` reducer appends to the list rather than overwriting it,
+    # which is exactly what the strategy ↔ tool loop needs.
+    messages: Annotated[List[BaseMessage], add_messages]
     trade_signals: List[Dict[str, Any]]
 
+
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
 
 def _to_jsonable(value: Any) -> Any:
     if isinstance(value, (dict, list, str, int, float, bool)) or value is None:
@@ -143,6 +161,10 @@ def execute_alpaca_trades(instructions: List[Dict[str, Any]], user_id: str) -> D
     return {"status": "complete", "executed": executed}
 
 
+# ---------------------------------------------------------------------------
+# MCP → LangChain tool conversion
+# ---------------------------------------------------------------------------
+
 def _json_type_to_python(schema: Dict[str, Any]) -> Any:
     json_type = schema.get("type")
     if json_type == "string":
@@ -223,6 +245,10 @@ def _convert_mcp_tools_to_langchain(session: ClientSession, mcp_tools: Any) -> L
     return tools
 
 
+# ---------------------------------------------------------------------------
+# JSON extraction
+# ---------------------------------------------------------------------------
+
 async def _extract_trade_json(text: str) -> List[Dict[str, Any]]:
     cleaned = text.strip()
     if "```json" in cleaned:
@@ -261,131 +287,196 @@ async def _invoke_with_backoff(llm_with_tools: Any, messages: List[Any], max_ret
     raise RuntimeError("Exceeded max retries due to rate limiting.")
 
 
-async def _run_strategy_with_tools(
-    state: TradingState,
-    llm_with_tools: Any,
-    tool_lookup: Dict[str, StructuredTool],
-) -> List[Dict[str, Any]]:
-    portfolio = state["portfolio_data"]
-    cash = portfolio.get("account_info", {}).get("cash", "unknown")
-    positions = portfolio.get("positions", [])
-    held_symbols = [p["symbol"] for p in positions if p.get("symbol")]
+# ---------------------------------------------------------------------------
+# Graph construction
+# ---------------------------------------------------------------------------
 
-    system_prompt = (
-        "You are an institutional trading strategist with full autonomy to discover and act on market opportunities.\n\n"
+def _build_graph(filtered_tFedgools: List[StructuredTool]):
+    """
+    Graph topology:
 
-        "RESEARCH:\n"
-        "You are NOT limited to existing holdings. Use your available tools proactively to find promising stocks. "
-        "Research any symbols you believe have opportunity — use price, quote, technical indicator, and news tools "
-        "to build conviction before deciding.\n\n"
+        START → analyst → strategy ⇄ tools (loop until no tool calls)
+                                  ↓
+                              executor → END
 
-        "CAPITAL RULES:\n"
-        f"- Your available cash is: {cash}. This is fixed. Do not assume it will increase.\n"
-        "- Do NOT count on proceeds from any sell instructions in this session — "
-        "sell settlements are not immediate, so treat available cash as the number above only.\n"
-        "- Do NOT deploy all available cash. Keep a minimum 20-30% reserve at all times.\n"
-        "- Spread buys across multiple positions. No single buy should exceed 20% of available cash.\n"
-        "- Size positions conservatively. Prioritize capital preservation over maximizing deployment.\n\n"
+    The `tools_condition` prebuilt router inspects the last AIMessage in
+    `state["messages"]`:
+      - if it contains tool_calls  → route to "tools"
+      - otherwise                  → route to "executor"
 
-        "SELL RULES:\n"
-        f"- You may only sell symbols you currently hold: {held_symbols if held_symbols else 'none'}.\n"
-        "- Do not instruct a sell for any symbol not in that list.\n\n"
-
-        "OUTPUT RULES:\n"
-        "- Output ONLY valid JSON: a list of trade instructions.\n"
-        "- Each instruction must have exactly these keys: action (buy or sell), symbol, quantity, rationale.\n"
-        "- Do NOT include hold instructions — omit them entirely.\n"
-        "- If no actionable opportunities exist, return an empty list: []\n"
-        "- You may call up to 4 tools before deciding. Use them to build conviction.\n"
-    )
-
-    portfolio_tokens = len(json.dumps(portfolio, default=str)) // 4
-    logger.info("Estimated portfolio tokens: ~%d", portfolio_tokens)
-
-    messages: List[Any] = [
-        SystemMessage(content=system_prompt),
-        HumanMessage(content=json.dumps({"portfolio_data": portfolio}, default=str)),
-    ]
-
-    for _ in range(2):
-        ai_message = await _invoke_with_backoff(llm_with_tools, messages)
-        messages.append(ai_message)
-
-        tool_calls = getattr(ai_message, "tool_calls", None) or []
-        if not tool_calls:
-            content = ai_message.content if isinstance(ai_message.content, str) else str(ai_message.content)
-            return await _extract_trade_json(content)
-
-        tool_calls = tool_calls[:4]  # hard cap regardless of what the model requests
-        for call in tool_calls:
-            tool_name = call["name"]
-            tool = tool_lookup.get(tool_name)
-            if tool is None:
-                tool_result = f"Tool '{tool_name}' is unavailable."
-            else:
-                tool_result = await tool.ainvoke(call.get("args", {}))
-
-            messages.append(
-                ToolMessage(
-                    content=tool_result if isinstance(tool_result, str) else json.dumps(tool_result, default=str),
-                    tool_call_id=call["id"],
-                )
-            )
-
-    # Final call — force JSON response, no more tool calls
-    messages.append(HumanMessage(
-        content="You have enough data. Do NOT call any tools. "
-                "Respond ONLY with a valid JSON list of trade instructions as specified. "
-                "If there are no actionable trades, return an empty list: []"
-    ))
-    ai_message = await _invoke_with_backoff(llm_with_tools, messages)
-    content = ai_message.content if isinstance(ai_message.content, str) else str(ai_message.content)
-    return await _extract_trade_json(content)
-
-
-def _build_graph():
+    The ToolNode executes all requested tools concurrently and appends
+    ToolMessage results back into `state["messages"]`, then returns to
+    "strategy" for the next LLM call.
+    """
     graph_builder = StateGraph(TradingState)
 
+    # ------------------------------------------------------------------
+    # analyst node — fetch portfolio, seed the message list
+    # ------------------------------------------------------------------
     async def analyst_node(state: TradingState) -> Dict[str, Any]:
         logger.info("Analyst node: fetching Alpaca portfolio for user_id=%s", state["user_id"])
         portfolio_data = get_alpaca_portfolio(state["user_id"])
-        return {"portfolio_data": portfolio_data}
 
+        cash = portfolio_data.get("account_info", {}).get("cash", "unknown")
+        positions = portfolio_data.get("positions", [])
+        held_symbols = [p["symbol"] for p in positions if p.get("symbol")]
+
+        system_prompt = (
+            "You are an institutional trading strategist with full autonomy to discover and act on market opportunities.\n\n"
+
+            "RESEARCH:\n"
+            "You are NOT limited to existing holdings. Use your available tools proactively to find promising stocks. "
+            "Research any symbols you believe have opportunity — use price, quote, technical indicator, and news tools "
+            "to build conviction before deciding.\n\n"
+
+            "CAPITAL RULES:\n"
+            f"- Your available cash is: {cash}. This is fixed. Do not assume it will increase.\n"
+            "- Do NOT count on proceeds from any sell instructions in this session — "
+            "sell settlements are not immediate, so treat available cash as the number above only.\n"
+            "- Do NOT deploy all available cash. Keep a minimum 20-30% reserve at all times.\n"
+            "- Spread buys across multiple positions. No single buy should exceed 20% of available cash.\n"
+            "- Size positions conservatively. Prioritize capital preservation over maximizing deployment.\n\n"
+
+            "SELL RULES:\n"
+            f"- You may only sell symbols you currently hold: {held_symbols if held_symbols else 'none'}.\n"
+            "- Do not instruct a sell for any symbol not in that list.\n\n"
+
+            "TOOL USAGE:\n"
+            "- You may call tools to research opportunities. After gathering sufficient data, stop calling tools.\n"
+            "- When you are ready to decide, do NOT call any more tools.\n\n"
+
+            "OUTPUT RULES:\n"
+            "- When you have finished your research, output ONLY valid JSON: a list of trade instructions.\n"
+            "- Each instruction must have exactly these keys: action (buy or sell), symbol, quantity, rationale.\n"
+            "- Do NOT include hold instructions — omit them entirely.\n"
+            "- If no actionable opportunities exist, return an empty list: []\n"
+        )
+
+        seed_messages: List[BaseMessage] = [
+            SystemMessage(content=system_prompt),
+            HumanMessage(content=json.dumps({"portfolio_data": portfolio_data}, default=str)),
+        ]
+
+        return {
+            "portfolio_data": portfolio_data,
+            "messages": seed_messages,  # add_messages will append these
+        }
+
+    # ------------------------------------------------------------------
+    # strategy node — single LLM call; graph routes back here after tools
+    # ------------------------------------------------------------------
     async def strategy_node(state: TradingState, config: RunnableConfig) -> Dict[str, Any]:
-        logger.info("Strategy node: generating trade signals with Claude")
+        logger.info("Strategy node: invoking LLM (message count=%d)", len(state["messages"]))
         runtime = config.get("configurable", {})
-        if "llm_with_tools" not in runtime or "tool_lookup" not in runtime:
-            raise ValueError("Missing runtime tools in graph config.")
-        llm_with_tools = runtime["llm_with_tools"]
-        tool_lookup = runtime["tool_lookup"]
-        instructions = await _run_strategy_with_tools(state, llm_with_tools, tool_lookup)
-        logger.info("Strategy node produced %d instructions", len(instructions))
-        return {"trade_signals": instructions}
+        if "llm_with_tools" not in runtime:
+            raise ValueError("Missing 'llm_with_tools' in graph config.")
 
+        llm_with_tools = runtime["llm_with_tools"]
+
+        # Count how many tool rounds have already happened so we can
+        # inject a stop instruction if the model is being too chatty.
+        tool_round_count = sum(
+            1 for m in state["messages"]
+            if isinstance(m, AIMessage) and getattr(m, "tool_calls", None)
+        )
+
+        messages = list(state["messages"])
+        if tool_round_count >= 4:
+            messages.append(
+                HumanMessage(
+                    content=(
+                        "You have gathered enough data. "
+                        "Do NOT call any more tools. "
+                        "Respond ONLY with a valid JSON list of trade instructions. "
+                        "If there are no actionable trades, return an empty list: []"
+                    )
+                )
+            )
+
+        ai_message = await _invoke_with_backoff(llm_with_tools, messages)
+        logger.info(
+            "Strategy node: tool_calls=%d",
+            len(getattr(ai_message, "tool_calls", None) or []),
+        )
+        return {"messages": [ai_message]}
+
+    # ------------------------------------------------------------------
+    # tool node — LangGraph's prebuilt ToolNode runs all tool calls
+    # concurrently and appends ToolMessage results to state["messages"]
+    # ------------------------------------------------------------------
+    tool_node = ToolNode(tools=filtered_tools)
+
+    # ------------------------------------------------------------------
+    # executor node — parse final JSON from last AIMessage and trade
+    # ------------------------------------------------------------------
     async def executor_node(state: TradingState) -> Dict[str, Any]:
-        logger.info("Executor node: submitting trade instructions to Alpaca")
+        logger.info("Executor node: parsing trade signals from final AI message")
+
+        # Find the last AIMessage that has no tool calls (the final decision)
+        final_ai_message = None
+        for msg in reversed(state["messages"]):
+            if isinstance(msg, AIMessage) and not getattr(msg, "tool_calls", None):
+                final_ai_message = msg
+                break
+
+        if final_ai_message is None:
+            logger.warning("Executor node: no final AI message found; skipping trades")
+            return {"trade_signals": []}
+
+        content = (
+            final_ai_message.content
+            if isinstance(final_ai_message.content, str)
+            else str(final_ai_message.content)
+        )
+
+        try:
+            trade_signals = await _extract_trade_json(content)
+        except (json.JSONDecodeError, ValueError) as exc:
+            logger.error("Executor node: failed to parse trade JSON — %s", exc)
+            return {"trade_signals": []}
+
+        logger.info("Executor node: submitting %d trade instructions to Alpaca", len(trade_signals))
         result = await asyncio.to_thread(
             execute_alpaca_trades,
-            state.get("trade_signals", []),
+            trade_signals,
             state["user_id"],
         )
         logger.info("Executor node complete: %s", json.dumps(result, default=str))
-        return {}
+        return {"trade_signals": trade_signals}
 
+    # ------------------------------------------------------------------
+    # Wire up the graph
+    # ------------------------------------------------------------------
     graph_builder.add_node("analyst", analyst_node)
     graph_builder.add_node("strategy", strategy_node)
+    graph_builder.add_node("tools", tool_node)
     graph_builder.add_node("executor", executor_node)
 
     graph_builder.add_edge(START, "analyst")
     graph_builder.add_edge("analyst", "strategy")
-    graph_builder.add_edge("strategy", "executor")
+
+    # tools_condition inspects the last message in state["messages"]:
+    #   has tool_calls  → "tools"
+    #   no tool_calls   → <default_sink> which we map to "executor"
+    graph_builder.add_conditional_edges(
+        "strategy",
+        tools_condition,
+        {
+            "tools": "tools",
+            END: "executor",  # tools_condition returns END when there are no tool calls
+        },
+    )
+
+    # After the tool node executes, always loop back to strategy
+    graph_builder.add_edge("tools", "strategy")
     graph_builder.add_edge("executor", END)
 
     return graph_builder.compile()
 
 
-TRADING_GRAPH = _build_graph()
-
+# ---------------------------------------------------------------------------
+# Public entry point
+# ---------------------------------------------------------------------------
 
 async def _run_trading_workflow_async(user_id: str) -> None:
     logger.info("Trading workflow started for user_id=%s", user_id)
@@ -411,10 +502,7 @@ async def _run_trading_workflow_async(user_id: str) -> None:
         server_params = StdioServerParameters(
             command=mcp_command,
             args=mcp_args,
-            env={
-                **os.environ,
-                "ALPHAVANTAGE_API_KEY": alphavantage_api_key,
-            }
+            env={**os.environ, "ALPHAVANTAGE_API_KEY": alphavantage_api_key},
         )
         read_stream, write_stream = await stack.enter_async_context(stdio_client(server_params))
 
@@ -432,10 +520,7 @@ async def _run_trading_workflow_async(user_id: str) -> None:
         filtered_tools = [
             t for t in all_tools.values()
             if any(kw in t.name.lower() for kw in KEYWORDS)
-        ] or list(all_tools.values())  # fallback: use all if none match keywords
-
-        # tool_lookup scoped to filtered tools only — keeps Claude and executor in sync
-        tool_lookup = {t.name: t for t in filtered_tools}
+        ] or list(all_tools.values())
 
         logger.info(
             "Tools: %d total, %d after dedup, %d after keyword filter",
@@ -449,22 +534,28 @@ async def _run_trading_workflow_async(user_id: str) -> None:
         )
         llm_with_tools = llm.bind_tools(filtered_tools)
 
+        # Graph is built fresh each invocation so it closes over the live
+        # MCP session (which is scoped to this AsyncExitStack).
+        trading_graph = _build_graph(filtered_tools)
+
         initial_state: TradingState = {
             "user_id": user_id,
             "portfolio_data": {},
+            "messages": [],
             "trade_signals": [],
         }
-        final_state = await TRADING_GRAPH.ainvoke(
+
+        final_state = await trading_graph.ainvoke(
             initial_state,
             config={
                 "configurable": {
                     "llm_with_tools": llm_with_tools,
-                    "tool_lookup": tool_lookup,
                 }
             },
         )
+
         logger.info(
-            "Trading workflow finished for user_id=%s with %s trade signals",
+            "Trading workflow finished for user_id=%s with %d trade signals",
             user_id,
             len(final_state.get("trade_signals", [])),
         )
