@@ -291,7 +291,7 @@ async def _invoke_with_backoff(llm_with_tools: Any, messages: List[Any], max_ret
 # Graph construction
 # ---------------------------------------------------------------------------
 
-def _build_graph(filtered_tFedgools: List[StructuredTool]):
+def _build_graph(filtered_tools: List[StructuredTool]):
     """
     Graph topology:
 
