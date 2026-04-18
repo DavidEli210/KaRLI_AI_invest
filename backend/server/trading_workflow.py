@@ -343,7 +343,7 @@ def _build_graph(filtered_tools: List[StructuredTool]):
 
             "TOOL USAGE:\n"
             "- You may call tools to research opportunities. After gathering sufficient data, stop calling tools.\n"
-            "- When you are ready to decide, do NOT call any more tools.\n\n"
+            "- When you are ready to decide, do NOT call any more tools. You may call up to a total of 10 in the whole conversation.\n\n"
 
             "OUTPUT RULES:\n"
             "- When you have finished your research, output ONLY valid JSON: a list of trade instructions.\n"
@@ -381,7 +381,7 @@ def _build_graph(filtered_tools: List[StructuredTool]):
         )
 
         messages = list(state["messages"])
-        if tool_round_count >= 4:
+        if tool_round_count >= 2:
             messages.append(
                 HumanMessage(
                     content=(
