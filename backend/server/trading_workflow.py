@@ -270,6 +270,64 @@ async def _extract_trade_json(text: str) -> List[Dict[str, Any]]:
     )
 
 
+def _safe_preview(text: str, max_len: int = 240) -> str:
+    normalized = " ".join((text or "").split())
+    if len(normalized) <= max_len:
+        return normalized
+    return f"{normalized[:max_len]}..."
+
+
+def _summarize_trade_instructions(instructions: List[Dict[str, Any]]) -> Dict[str, Any]:
+    buys: List[Dict[str, Any]] = []
+    sells: List[Dict[str, Any]] = []
+
+    for instruction in instructions:
+        action = str(instruction.get("action", "")).lower()
+        if action == "buy":
+            buys.append(instruction)
+        elif action == "sell":
+            sells.append(instruction)
+
+    symbols = [
+        str(instruction.get("symbol"))
+        for instruction in instructions
+        if instruction.get("symbol")
+    ]
+    rationale_preview = [
+        _safe_preview(str(instruction.get("rationale", "")), max_len=120)
+        for instruction in instructions
+        if instruction.get("rationale")
+    ][:3]
+
+    return {
+        "instruction_count": len(instructions),
+        "buy_count": len(buys),
+        "sell_count": len(sells),
+        "symbols": sorted(set(symbols)),
+        "rationale_preview": rationale_preview,
+    }
+
+
+async def _summarize_decision_from_text(text: str) -> Dict[str, Any]:
+    preview = _safe_preview(text)
+    try:
+        trade_signals = await _extract_trade_json(text)
+    except (json.JSONDecodeError, ValueError) as exc:
+        return {
+            "parse_ok": False,
+            "reason": "final_model_output_not_valid_trade_json",
+            "error": str(exc),
+            "content_preview": preview,
+            "content_length": len(text or ""),
+        }
+
+    summary = _summarize_trade_instructions(trade_signals)
+    if summary["buy_count"] == 0:
+        summary["no_buy_reason"] = "model_produced_no_buy_instructions"
+    summary["parse_ok"] = True
+    return summary
+
+
 async def _invoke_with_backoff(llm_with_tools: Any, messages: List[Any], max_retries: int = 4) -> Any:
     for attempt in range(max_retries):
         try:
@@ -394,10 +452,23 @@ def _build_graph(filtered_tools: List[StructuredTool]):
             )
 
         ai_message = await _invoke_with_backoff(llm_with_tools, messages)
-        logger.info(
-            "Strategy node: tool_calls=%d",
-            len(getattr(ai_message, "tool_calls", None) or []),
-        )
+        tool_calls = getattr(ai_message, "tool_calls", None) or []
+        logger.info("Strategy node: tool_calls=%d tool_round_count=%d", len(tool_calls), tool_round_count)
+
+        if tool_calls:
+            tool_names = [str(call.get("name", "unknown_tool")) for call in tool_calls if isinstance(call, dict)]
+            logger.info(
+                "Strategy decision summary: requested_tools=%s requested_tool_count=%d",
+                tool_names,
+                len(tool_names),
+            )
+        else:
+            content = ai_message.content if isinstance(ai_message.content, str) else str(ai_message.content)
+            decision_summary = await _summarize_decision_from_text(content)
+            logger.info(
+                "Strategy decision summary: %s",
+                json.dumps(decision_summary, default=str),
+            )
         return {"messages": [ai_message]}
 
     # ------------------------------------------------------------------
@@ -432,8 +503,22 @@ def _build_graph(filtered_tools: List[StructuredTool]):
         try:
             trade_signals = await _extract_trade_json(content)
         except (json.JSONDecodeError, ValueError) as exc:
-            logger.error("Executor node: failed to parse trade JSON — %s", exc)
+            logger.error(
+                "Executor node: failed to parse trade JSON — %s | content_length=%d | preview=%s",
+                exc,
+                len(content),
+                _safe_preview(content),
+            )
             return {"trade_signals": []}
+
+        signal_summary = _summarize_trade_instructions(trade_signals)
+        logger.info("Executor node decision summary: %s", json.dumps(signal_summary, default=str))
+        if signal_summary["buy_count"] == 0:
+            logger.warning(
+                "Executor node: no buy instructions generated. sell_count=%d symbols=%s",
+                signal_summary["sell_count"],
+                signal_summary["symbols"],
+            )
 
         logger.info("Executor node: submitting %d trade instructions to Alpaca", len(trade_signals))
         result = await asyncio.to_thread(
@@ -559,6 +644,17 @@ async def _run_trading_workflow_async(user_id: str) -> None:
             user_id,
             len(final_state.get("trade_signals", [])),
         )
+        final_signals = final_state.get("trade_signals", []) or []
+        if isinstance(final_signals, list):
+            final_summary = _summarize_trade_instructions(final_signals)
+            logger.info("Trading workflow final decision summary: %s", json.dumps(final_summary, default=str))
+            if final_summary["buy_count"] == 0:
+                logger.info(
+                    "Trading workflow: no buy signal generated for user_id=%s (sell_count=%d, symbols=%s)",
+                    user_id,
+                    final_summary["sell_count"],
+                    final_summary["symbols"],
+                )
 
 
 def run_trading_workflow(user_id: str) -> None:
